@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -122,7 +123,11 @@ func (a *KafkaAdapter) formatMessage(message *router.Message) (*sarama.ProducerM
 		}
 		encoder = sarama.ByteEncoder(w.Bytes())
 	} else {
-		encoder = sarama.StringEncoder(message.Data)
+		js, err := generateJSON(message)
+		if err != nil {
+			return nil, err
+		}
+		encoder = sarama.ByteEncoder(js)
 	}
 
 	return &sarama.ProducerMessage{
@@ -158,4 +163,41 @@ func errorf(format string, a ...interface{}) (err error) {
 		fmt.Println(err.Error())
 	}
 	return
+}
+
+func generateJSON(m *router.Message) ([]byte, error) {
+	dockerInfo := DockerInfo{
+		Name:     m.Container.Name,
+		ID:       m.Container.ID,
+		Image:    m.Container.Config.Image,
+		Hostname: m.Container.Config.Hostname,
+	}
+
+	var jsonMsg map[string]interface{}
+	err := json.Unmarshal([]byte(m.Data), &jsonMsg)
+	if err != nil {
+		// the message is not in JSON, make a new JSON message
+		msg := LogstashMessage{
+			Message: m.Data,
+			Docker:  dockerInfo,
+		}
+		return json.Marshal(msg)
+	}
+
+	// the message is already in JSON, just add the docker specific fields as a nested structure
+	jsonMsg["docker"] = dockerInfo
+	return json.Marshal(jsonMsg)
+}
+
+type DockerInfo struct {
+	Name     string `json:"name"`
+	ID       string `json:"id"`
+	Image    string `json:"image"`
+	Hostname string `json:"hostname"`
+}
+
+// LogstashMessage is a simple JSON input to Logstash.
+type LogstashMessage struct {
+	Message string     `json:"message"`
+	Docker  DockerInfo `json:"docker"`
 }
